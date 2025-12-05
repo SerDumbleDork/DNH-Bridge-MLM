@@ -9,7 +9,7 @@ public class SkyCollider: MonoBehaviour
         if (other.CompareTag("Car"))
         {
             tooHigh = true;
-            Debug.Log("Car crossed bridge successfully!");
+            Debug.Log("Too High Fitness set to 0");
         }
     }
 }

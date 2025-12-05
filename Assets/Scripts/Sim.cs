@@ -5,6 +5,7 @@ public class Sim : MonoBehaviour
 {
     public Goal goal;
     public SkyCollider sc;
+    public VoidCollider vc;
     public Checkpoint check;
 
     public bool simulationRunning = false;
@@ -154,7 +155,10 @@ public class Sim : MonoBehaviour
         SetSimulationState(false);
 
         foreach (var builder in FindObjectsOfType<BarCreator>())
+        {
             builder.CleanNodes();
+            builder.ResetBuilder();
+        }
 
         Debug.Log("Bridge and car reset.");
 
@@ -169,6 +173,10 @@ public class Sim : MonoBehaviour
             SkyCollider sc = FindObjectOfType<SkyCollider>();
             if (sc != null)
                 sc.tooHigh = false;
+
+            VoidCollider vc = FindObjectOfType<VoidCollider>();
+            if (vc != null)
+                vc.tooLow = false;
 
     }
 

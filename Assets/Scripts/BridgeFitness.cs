@@ -1,27 +1,40 @@
 ﻿using UnityEngine;
+using System.Collections.Generic;
 
 public static class BridgeFitness
 {
+    // ==========================================================
+    // FITNESS CALCULATION
+    // ==========================================================
     public static float Evaluate(
         Car[] cars,
         BridgeGene[] genes,
         Goal goal,
         Checkpoint checkpoint,
         SkyCollider sc,
+        VoidCollider vc,
         BarCreator bc)
     {
         if (bc == null) return 0f;
 
-        // ----------------------------------------------------------
-        // WORLD
-        // ----------------------------------------------------------
-        float leftX  = bc.leftBound.position.x;
+        // Grab fitness handler instance
+        var f = FitnessHandler.instance;
+        if (f == null)
+        {
+            Debug.LogError("FitnessHandler.instance is NULL! Add FitnessHandler to scene.");
+            return 0f;
+        }
+
+        // ==========================================================
+        // WORLD INFO
+        // ==========================================================
+        float leftX = bc.leftBound.position.x;
         float rightX = bc.rightBound.position.x;
         float spanWidth = Mathf.Abs(rightX - leftX);
 
-        // ----------------------------------------------------------
+        // ==========================================================
         // 1. CAR PROGRESS
-        // ----------------------------------------------------------
+        // ==========================================================
         float forwardProgress = 0f;
         bool carFellEarly = false;
 
@@ -32,11 +45,10 @@ public static class BridgeFitness
                 if (c == null) continue;
 
                 float dist = c.transform.position.x - leftX;
+                forwardProgress = Mathf.Max(forwardProgress, dist);
 
                 if (c.transform.position.y < -1f && dist < spanWidth * 0.2f)
                     carFellEarly = true;
-
-                forwardProgress = Mathf.Max(forwardProgress, dist);
             }
         }
 
@@ -44,21 +56,23 @@ public static class BridgeFitness
             ? Mathf.Clamp01(forwardProgress / spanWidth)
             : 0f;
 
-        // ----------------------------------------------------------
+        // ==========================================================
         // 2. STRUCTURE ANALYSIS
-        // ----------------------------------------------------------
+        // ==========================================================
         RoadBar[] roads = Object.FindObjectsOfType<RoadBar>();
         BeamBar[] beams = Object.FindObjectsOfType<BeamBar>();
 
         int totalBars = 0;
         int connectedBars = 0;
-        int anchoredBars = 0;
         int properNodeConnections = 0;
 
         float sagTotal = 0f;
-        float oobBars  = 0f;
+        float oobBars = 0f;
+        float shortBarPenalty = 0f;
 
         const float sagLimit = 0.6f;
+
+        HashSet<Point> uniqueAnchoredNodes = new HashSet<Point>();
 
         void ScoreBar(Point a, Point b, DistanceJoint2D ja, DistanceJoint2D jb)
         {
@@ -71,81 +85,89 @@ public static class BridgeFitness
             {
                 connectedBars++;
 
-                if (!a.isFloating && !b.isFloating)
+                bool properA = !a.isFloating;
+                bool properB = !b.isFloating;
+
+                if (properA && properB)
                     properNodeConnections++;
             }
 
-            // Anchor usage
-            if (a.isAnchored || b.isAnchored)
-                anchoredBars++;
+            if (a.isAnchored) uniqueAnchoredNodes.Add(a);
+            if (b.isAnchored) uniqueAnchoredNodes.Add(b);
 
-            // Sag penalty
             Vector2 mid = (a.rb.position + b.rb.position) * 0.5f;
             if (mid.y < -3f)
                 sagTotal += Mathf.Abs(mid.y + 3f);
 
-            // Out-of-bounds
             if (mid.x < leftX - 1.5f || mid.x > rightX + 1.5f)
                 oobBars++;
+
+            float barLength = Vector2.Distance(a.rb.position, b.rb.position);
+            if (barLength < f.MinBarLength)
+                shortBarPenalty += (f.MinBarLength - barLength);
         }
 
         foreach (var r in roads) ScoreBar(r.nodeA, r.nodeB, r.jointA, r.jointB);
         foreach (var b in beams) ScoreBar(b.nodeA, b.nodeB, b.jointA, b.jointB);
 
         float stability = 0f;
-        float anchorUse = 0f;
         float properConnectionRatio = 0f;
+        float anchorUse = 0f;
         float sagPenalty = 0f;
 
         if (totalBars > 0)
         {
-            stability             = Mathf.Clamp01(connectedBars / (float)totalBars);
-            anchorUse             = Mathf.Clamp01(anchoredBars / (float)totalBars);
+            stability = Mathf.Clamp01(connectedBars / (float)totalBars);
             properConnectionRatio = Mathf.Clamp01(properNodeConnections / (float)totalBars);
+
+            float anchorCount = uniqueAnchoredNodes.Count;
+            anchorUse = Mathf.Clamp01(anchorCount / Mathf.Max(1f, f.TotalAnchors));
 
             sagPenalty = Mathf.Clamp01(sagTotal / (totalBars * sagLimit));
         }
 
-        // ----------------------------------------------------------
+        // ==========================================================
         // 3. CHECKPOINT / GOAL
-        // ----------------------------------------------------------
+        // ==========================================================
         float checkpointScore =
             (checkpoint != null && checkpoint.checkpointReached) ? 1f : 0f;
 
         float goalScore =
             (goal != null && goal.endReached) ? 1f : 0f;
 
-        // ----------------------------------------------------------
+        // ==========================================================
         // 4. FINAL FITNESS
-        // ----------------------------------------------------------
+        // ==========================================================
         float fitness = 0f;
 
-        // Success bonuses
-        fitness += goalScore * 40f;
-        fitness += checkpointScore * 20f;
-
-        // Progress
-        fitness += progress01 * 20f;
+        // Success rewards
+        fitness += goalScore      * f.GoalReward;
+        fitness += checkpointScore * f.CheckpointReward;
+        fitness += progress01     * f.ProgressReward;
 
         // Structure rewards
-        fitness += stability * 12f;
-        fitness += properConnectionRatio * 20f;
-        fitness += anchorUse * 12f;
+        fitness += stability             * f.StabilityReward;
+        fitness += properConnectionRatio * f.ProperConnectionReward;
+        fitness += anchorUse             * f.AnchorUseReward;
 
         // Penalties
-        if (carFellEarly) fitness -= 10f;
-        if (stability < 0.35f && totalBars > 0) fitness -= 8f;
+        if (carFellEarly) fitness += f.EarlyFallPenalty;
+        if (stability < 0.35f && totalBars > 0)
+            fitness += f.LowStabilityPenalty;
 
-        fitness -= sagPenalty * 15f;
-        fitness -= (oobBars / Mathf.Max(1f, totalBars)) * 6f;
+        fitness += sagPenalty * f.SagPenaltyMultiplier;
+        fitness += (oobBars / Mathf.Max(1f, totalBars)) * f.OOBPenaltyMultiplier;
+        fitness += shortBarPenalty * f.ShortBarPenaltyMultiplier;
 
-        // No structure at all = very bad
         if (totalBars == 0)
-            fitness -= 50f;
+            fitness += f.NoStructurePenalty;
 
-        if (sc.tooHigh == true)
-            fitness = 0;
+        if (sc != null && sc.tooHigh)
+            fitness += f.TooHighPenalty;
 
-        return Mathf.Clamp(fitness, -100f, 100f);
+        if (vc != null && vc.tooLow)
+            fitness += f.TooLowPenalty;
+
+        return Mathf.Clamp(fitness, -999f, 999f);
     }
 }

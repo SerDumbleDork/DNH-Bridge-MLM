@@ -104,6 +104,13 @@ public class BarCreator : MonoBehaviour
         Vector2 s = startNode.transform.position;
         Vector2 dir = (snapped - s).normalized;
         float len = Mathf.Min(Vector2.Distance(snapped, s), maxLength);
+        if (len < 1f)
+        {
+            placing = false;
+            EndPreview();
+            return null;
+        }
+
         Vector2 endPos = s + dir * len;
 
         Point endNode = snappedNode ?? CreateNode(endPos);
@@ -325,5 +332,17 @@ public class BarCreator : MonoBehaviour
             return best;
 
         return CreateNode(pos);
+    }
+
+    public void ResetBuilder()
+    {
+        placing = false;
+        startNode = null;
+
+        if (previewObj != null)
+        {
+            GameObject.Destroy(previewObj);
+            previewObj = null;
+        }
     }
 }
